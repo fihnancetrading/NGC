@@ -33,7 +33,8 @@ def init_db():
             status TEXT NOT NULL,
             activations INTEGER DEFAULT 0,
             max_activations INTEGER DEFAULT 1,
-            last_validated TEXT
+            last_validated TEXT,
+            account_number TEXT
         )
     ''')
     
@@ -44,6 +45,7 @@ def init_db():
             license_key TEXT,
             timestamp TEXT,
             ip_address TEXT,
+            account_number TEXT,
             result TEXT
         )
     ''')
