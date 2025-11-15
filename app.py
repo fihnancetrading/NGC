@@ -528,20 +528,218 @@ def get_stats():
         print(f"Error in stats: {str(e)}")
         return jsonify({'error': 'Server error'}), 500
 
-#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# INITIALIZATION
-#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ═══════════════════════════════════════════════════════════════════
+# ADD THIS ENDPOINT TO YOUR app.py FILE
+# Place it AFTER the /stats endpoint (around line 530)
+# ═══════════════════════════════════════════════════════════════════
 
-# Initialize database on startup
-init_db()
+@app.route('/unbind', methods=['POST'])
+def unbind_license():
+    """
+    Unbind a license from its account (ADMIN ONLY)
+    
+    Expected JSON:
+    {
+        "license_key": "NGC-XXXX-XXXX-XXXX-XXXX",
+        "reason": "Customer requested transfer" (optional)
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "message": "License unbound successfully",
+        "previous_account": "12345678"
+    }
+    """
+    try:
+        # Verify admin authentication
+        api_key = request.headers.get('X-API-Key')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        
+        if api_key != ADMIN_API_KEY:
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized - Admin API key required'
+            }), 401
+        
+        data = request.json
+        license_key = data.get('license_key', '').strip().upper()
+        reason = data.get('reason', 'Manual unbind by admin')
+        
+        if not license_key:
+            return jsonify({
+                'success': False,
+                'message': 'License key is required'
+            }), 400
+        
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        
+        # Get current license info
+        c.execute('''
+            SELECT license_key, account_number, email, product, status
+            FROM licenses 
+            WHERE license_key = ?
+        ''', (license_key,))
+        
+        result = c.fetchone()
+        
+        if not result:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'message': 'License not found'
+            })
+        
+        key, bound_account, email, product, status = result
+        
+        # Check if already unbound
+        if bound_account is None or bound_account == '':
+            conn.close()
+            return jsonify({
+                'success': False,
+                'message': 'License is already unbound (not activated on any account)'
+            })
+        
+        # Store previous account for logging
+        previous_account = bound_account
+        
+        # Unbind the license (reset account_number to NULL)
+        c.execute('''
+            UPDATE licenses 
+            SET account_number = NULL, activations = 0
+            WHERE license_key = ?
+        ''', (license_key,))
+        
+        # Log the unbind action
+        c.execute('''
+            INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (license_key, datetime.now().isoformat(), request.remote_addr, previous_account, f'UNBIND: {reason}'))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log to console
+        print(f"🔓 LICENSE UNBOUND:")
+        print(f"   Key: {license_key}")
+        print(f"   Previous Account: {previous_account}")
+        print(f"   Email: {email}")
+        print(f"   Product: {product}")
+        print(f"   Reason: {reason}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'License unbound successfully',
+            'license_key': license_key,
+            'previous_account': previous_account,
+            'email': email,
+            'product': product,
+            'status': 'License is now available for activation on any account'
+        })
+        
+    except Exception as e:
+        print(f"Error in unbind: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Server error during unbind operation'
+        }), 500
 
-#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RUN SERVER
-#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🚀 NGC License Server starting on port {port}")
-    print(f"📊 Database: {DATABASE}")
-    print(f"✅ Server ready!")
-    app.run(host='0.0.0.0', port=port, debug=False)
+@app.route('/rebind', methods=['POST'])
+def rebind_license():
+    """
+    Rebind a license to a specific account (ADMIN ONLY)
+    Useful for transferring a license from one account to another
+    
+    Expected JSON:
+    {
+        "license_key": "NGC-XXXX-XXXX-XXXX-XXXX",
+        "new_account": "87654321",
+        "reason": "Account transfer approved" (optional)
+    }
+    """
+    try:
+        # Verify admin authentication
+        api_key = request.headers.get('X-API-Key')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        
+        if api_key != ADMIN_API_KEY:
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized - Admin API key required'
+            }), 401
+        
+        data = request.json
+        license_key = data.get('license_key', '').strip().upper()
+        new_account = str(data.get('new_account', '')).strip()
+        reason = data.get('reason', 'Manual rebind by admin')
+        
+        if not license_key or not new_account:
+            return jsonify({
+                'success': False,
+                'message': 'Both license_key and new_account are required'
+            }), 400
+        
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        
+        # Get current license info
+        c.execute('''
+            SELECT license_key, account_number, email, product, status
+            FROM licenses 
+            WHERE license_key = ?
+        ''', (license_key,))
+        
+        result = c.fetchone()
+        
+        if not result:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'message': 'License not found'
+            })
+        
+        key, old_account, email, product, status = result
+        
+        # Rebind to new account
+        c.execute('''
+            UPDATE licenses 
+            SET account_number = ?, activations = 1, last_validated = ?
+            WHERE license_key = ?
+        ''', (new_account, datetime.now().isoformat(), license_key))
+        
+        # Log the rebind action
+        c.execute('''
+            INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (license_key, datetime.now().isoformat(), request.remote_addr, new_account, 
+              f'REBIND: {old_account if old_account else "unbound"} → {new_account}. Reason: {reason}'))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log to console
+        print(f"🔄 LICENSE REBOUND:")
+        print(f"   Key: {license_key}")
+        print(f"   Old Account: {old_account if old_account else 'None (unbound)'}")
+        print(f"   New Account: {new_account}")
+        print(f"   Email: {email}")
+        print(f"   Reason: {reason}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'License rebound successfully',
+            'license_key': license_key,
+            'old_account': old_account if old_account else 'unbound',
+            'new_account': new_account,
+            'email': email,
+            'product': product
+        })
+        
+    except Exception as e:
+        print(f"Error in rebind: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Server error during rebind operation'
+        }), 500
