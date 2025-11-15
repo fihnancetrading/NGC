@@ -17,42 +17,7 @@ DATABASE = 'licenses.db'
 # DATABASE FUNCTIONS
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def init_db():
-    """Initialize the database with necessary tables"""
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    
-    # Create licenses table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS licenses (
-            license_key TEXT PRIMARY KEY,
-            email TEXT NOT NULL,
-            product TEXT NOT NULL,
-            created_date TEXT NOT NULL,
-            expiry_date TEXT NOT NULL,
-            status TEXT NOT NULL,
-            activations INTEGER DEFAULT 0,
-            max_activations INTEGER DEFAULT 1,
-            last_validated TEXT,
-            account_number TEXT
-        )
-    ''')
-    
-    # Create validation logs table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS validation_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key TEXT,
-            timestamp TEXT,
-            ip_address TEXT,
-            account_number TEXT,
-            result TEXT
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized")
+v
 
 def generate_license_key():
     """Generate a unique license key"""
