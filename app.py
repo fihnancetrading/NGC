@@ -17,8 +17,6 @@ DATABASE = 'licenses.db'
 # DATABASE FUNCTIONS
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-v
-
 def generate_license_key():
     """Generate a unique license key"""
     # Format: NGC-XXXX-XXXX-XXXX-XXXX
