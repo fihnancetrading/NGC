@@ -1,5 +1,5 @@
 # NGC License Server - Complete Flask Application with Account Binding
-# FIXED VERSION - Added account binding security
+# FIXED VERSION - Added account binding security + Database initialization
 
 from flask import Flask, request, jsonify
 import sqlite3
@@ -16,6 +16,43 @@ DATABASE = 'licenses.db'
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DATABASE FUNCTIONS
 #━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def init_db():
+    """Initialize the database with necessary tables"""
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    
+    # Create licenses table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS licenses (
+            license_key TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            product TEXT NOT NULL,
+            created_date TEXT NOT NULL,
+            expiry_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            activations INTEGER DEFAULT 0,
+            max_activations INTEGER DEFAULT 1,
+            last_validated TEXT,
+            account_number TEXT
+        )
+    ''')
+    
+    # Create validation logs table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS validation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            license_key TEXT,
+            timestamp TEXT,
+            ip_address TEXT,
+            account_number TEXT,
+            result TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized")
 
 def generate_license_key():
     """Generate a unique license key"""
@@ -334,9 +371,9 @@ def generate_license():
     Optional auth header: X-API-Key
     """
     try:
-        # Simple API key protection (change this!)
+        # Simple API key protection
         api_key = request.headers.get('X-API-Key')
-        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'WX81849888')
         
         if api_key != ADMIN_API_KEY:
             return jsonify({
@@ -376,6 +413,8 @@ def generate_license():
         conn.commit()
         conn.close()
         
+        print(f"✅ License generated: {license_key} for {email}")
+        
         return jsonify({
             'success': True,
             'license_key': license_key,
@@ -388,9 +427,11 @@ def generate_license():
         
     except Exception as e:
         print(f"Error in generate: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
-            'message': 'Server error during generation'
+            'message': f'Server error during generation: {str(e)}'
         }), 500
 
 @app.route('/check/<license_key>', methods=['GET'])
@@ -453,7 +494,7 @@ def get_stats():
     """Get basic statistics (admin function)"""
     try:
         api_key = request.headers.get('X-API-Key')
-        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'WX81849888')
         
         if api_key != ADMIN_API_KEY:
             return jsonify({'error': 'Unauthorized'}), 401
@@ -491,33 +532,12 @@ def get_stats():
         print(f"Error in stats: {str(e)}")
         return jsonify({'error': 'Server error'}), 500
 
-# ═══════════════════════════════════════════════════════════════════
-# ADD THIS ENDPOINT TO YOUR app.py FILE
-# Place it AFTER the /stats endpoint (around line 530)
-# ═══════════════════════════════════════════════════════════════════
-
 @app.route('/unbind', methods=['POST'])
 def unbind_license():
-    """
-    Unbind a license from its account (ADMIN ONLY)
-    
-    Expected JSON:
-    {
-        "license_key": "NGC-XXXX-XXXX-XXXX-XXXX",
-        "reason": "Customer requested transfer" (optional)
-    }
-    
-    Returns:
-    {
-        "success": true,
-        "message": "License unbound successfully",
-        "previous_account": "12345678"
-    }
-    """
+    """Unbind a license from its account (ADMIN ONLY)"""
     try:
-        # Verify admin authentication
         api_key = request.headers.get('X-API-Key')
-        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'WX81849888')
         
         if api_key != ADMIN_API_KEY:
             return jsonify({
@@ -538,7 +558,6 @@ def unbind_license():
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         
-        # Get current license info
         c.execute('''
             SELECT license_key, account_number, email, product, status
             FROM licenses 
@@ -556,25 +575,21 @@ def unbind_license():
         
         key, bound_account, email, product, status = result
         
-        # Check if already unbound
         if bound_account is None or bound_account == '':
             conn.close()
             return jsonify({
                 'success': False,
-                'message': 'License is already unbound (not activated on any account)'
+                'message': 'License is already unbound'
             })
         
-        # Store previous account for logging
         previous_account = bound_account
         
-        # Unbind the license (reset account_number to NULL)
         c.execute('''
             UPDATE licenses 
             SET account_number = NULL, activations = 0
             WHERE license_key = ?
         ''', (license_key,))
         
-        # Log the unbind action
         c.execute('''
             INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
             VALUES (?, ?, ?, ?, ?)
@@ -583,13 +598,7 @@ def unbind_license():
         conn.commit()
         conn.close()
         
-        # Log to console
-        print(f"🔓 LICENSE UNBOUND:")
-        print(f"   Key: {license_key}")
-        print(f"   Previous Account: {previous_account}")
-        print(f"   Email: {email}")
-        print(f"   Product: {product}")
-        print(f"   Reason: {reason}")
+        print(f"🔓 LICENSE UNBOUND: {license_key} from account {previous_account}")
         
         return jsonify({
             'success': True,
@@ -608,24 +617,12 @@ def unbind_license():
             'message': 'Server error during unbind operation'
         }), 500
 
-
 @app.route('/rebind', methods=['POST'])
 def rebind_license():
-    """
-    Rebind a license to a specific account (ADMIN ONLY)
-    Useful for transferring a license from one account to another
-    
-    Expected JSON:
-    {
-        "license_key": "NGC-XXXX-XXXX-XXXX-XXXX",
-        "new_account": "87654321",
-        "reason": "Account transfer approved" (optional)
-    }
-    """
+    """Rebind a license to a specific account (ADMIN ONLY)"""
     try:
-        # Verify admin authentication
         api_key = request.headers.get('X-API-Key')
-        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'change-me-in-production')
+        ADMIN_API_KEY = os.environ.get('ADMIN_API_KEY', 'WX81849888')
         
         if api_key != ADMIN_API_KEY:
             return jsonify({
@@ -647,7 +644,6 @@ def rebind_license():
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         
-        # Get current license info
         c.execute('''
             SELECT license_key, account_number, email, product, status
             FROM licenses 
@@ -665,14 +661,12 @@ def rebind_license():
         
         key, old_account, email, product, status = result
         
-        # Rebind to new account
         c.execute('''
             UPDATE licenses 
             SET account_number = ?, activations = 1, last_validated = ?
             WHERE license_key = ?
         ''', (new_account, datetime.now().isoformat(), license_key))
         
-        # Log the rebind action
         c.execute('''
             INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
             VALUES (?, ?, ?, ?, ?)
@@ -682,13 +676,7 @@ def rebind_license():
         conn.commit()
         conn.close()
         
-        # Log to console
-        print(f"🔄 LICENSE REBOUND:")
-        print(f"   Key: {license_key}")
-        print(f"   Old Account: {old_account if old_account else 'None (unbound)'}")
-        print(f"   New Account: {new_account}")
-        print(f"   Email: {email}")
-        print(f"   Reason: {reason}")
+        print(f"🔄 LICENSE REBOUND: {license_key} from {old_account} to {new_account}")
         
         return jsonify({
             'success': True,
@@ -706,3 +694,18 @@ def rebind_license():
             'success': False,
             'message': 'Server error during rebind operation'
         }), 500
+
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# INITIALIZATION & SERVER STARTUP
+#━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Initialize database when running with gunicorn (Render's production server)
+print("🔧 Initializing NGC License Server...")
+init_db()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🚀 NGC License Server starting on port {port}")
+    print(f"📊 Database: {DATABASE}")
+    print(f"✅ Server ready!")
+    app.run(host='0.0.0.0', port=port, debug=False)
