@@ -1,5 +1,5 @@
-# NGC License Server - Complete Flask Application
-# Copy this entire file and save as: app.py
+# NGC License Server - Complete Flask Application with Account Binding
+# FIXED VERSION - Added account binding security
 
 from flask import Flask, request, jsonify
 import sqlite3
@@ -105,12 +105,12 @@ def home():
 @app.route('/validate', methods=['POST'])
 def validate_license():
     """
-    Validate a license key from MT5 EA
+    Validate a license key from MT5 EA with account binding
     
     Expected JSON:
     {
         "license_key": "NGC-XXXX-XXXX-XXXX-XXXX",
-        "account_number": "12345678"  (optional)
+        "account_number": "12345678"
     }
     
     Returns:
@@ -124,7 +124,7 @@ def validate_license():
     try:
         data = request.json
         license_key = data.get('license_key', '').strip().upper()
-        account_number = data.get('account_number', '')
+        account_number = str(data.get('account_number', '')).strip()
         ip_address = request.remote_addr
         
         if not license_key:
@@ -133,13 +133,19 @@ def validate_license():
                 'message': 'License key is required'
             }), 400
         
+        if not account_number:
+            return jsonify({
+                'valid': False,
+                'message': 'Account number is required'
+            }), 400
+        
         # Connect to database
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         
-        # Get license info
+        # Get license info including account_number
         c.execute('''
-            SELECT license_key, email, product, expiry_date, status, activations, max_activations 
+            SELECT license_key, email, product, expiry_date, status, activations, max_activations, account_number
             FROM licenses 
             WHERE license_key = ?
         ''', (license_key,))
@@ -149,9 +155,9 @@ def validate_license():
         if not result:
             # Log failed validation
             c.execute('''
-                INSERT INTO validation_logs (license_key, timestamp, ip_address, result)
-                VALUES (?, ?, ?, ?)
-            ''', (license_key, datetime.now().isoformat(), ip_address, 'NOT_FOUND'))
+                INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (license_key, datetime.now().isoformat(), ip_address, account_number, 'NOT_FOUND'))
             conn.commit()
             conn.close()
             
@@ -161,15 +167,41 @@ def validate_license():
             })
         
         # Parse result
-        key, email, product, expiry_date, status, activations, max_activations = result
+        key, email, product, expiry_date, status, activations, max_activations, bound_account = result
+        
+        # 🔒 ACCOUNT BINDING SECURITY CHECK
+        if bound_account is None or bound_account == '':
+            # First time validation - bind this account to the license
+            c.execute('''
+                UPDATE licenses 
+                SET account_number = ?, activations = 1, last_validated = ?
+                WHERE license_key = ?
+            ''', (account_number, datetime.now().isoformat(), license_key))
+            conn.commit()
+            print(f"✅ License {license_key} bound to account {account_number}")
+            
+        elif bound_account != account_number:
+            # Different account trying to use this license - REJECT
+            c.execute('''
+                INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (license_key, datetime.now().isoformat(), ip_address, account_number, 'ACCOUNT_MISMATCH'))
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                'valid': False,
+                'message': f'License already activated on a different account',
+                'error_code': 'ACCOUNT_MISMATCH'
+            })
         
         # Check if expired
         expiry = datetime.strptime(expiry_date, '%Y-%m-%d')
         if expiry < datetime.now():
             c.execute('''
-                INSERT INTO validation_logs (license_key, timestamp, ip_address, result)
-                VALUES (?, ?, ?, ?)
-            ''', (license_key, datetime.now().isoformat(), ip_address, 'EXPIRED'))
+                INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (license_key, datetime.now().isoformat(), ip_address, account_number, 'EXPIRED'))
             conn.commit()
             conn.close()
             
@@ -182,9 +214,9 @@ def validate_license():
         # Check if active
         if status != 'active':
             c.execute('''
-                INSERT INTO validation_logs (license_key, timestamp, ip_address, result)
-                VALUES (?, ?, ?, ?)
-            ''', (license_key, datetime.now().isoformat(), ip_address, 'INACTIVE'))
+                INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (license_key, datetime.now().isoformat(), ip_address, account_number, 'INACTIVE'))
             conn.commit()
             conn.close()
             
@@ -192,12 +224,6 @@ def validate_license():
                 'valid': False,
                 'message': f'License status: {status}'
             })
-        
-        # Check activation limit
-        if activations >= max_activations:
-            # Could allow validation even if max activations reached
-            # This depends on your business logic
-            pass
         
         # Update last validated time
         c.execute('''
@@ -208,9 +234,9 @@ def validate_license():
         
         # Log successful validation
         c.execute('''
-            INSERT INTO validation_logs (license_key, timestamp, ip_address, result)
-            VALUES (?, ?, ?, ?)
-        ''', (license_key, datetime.now().isoformat(), ip_address, 'SUCCESS'))
+            INSERT INTO validation_logs (license_key, timestamp, ip_address, account_number, result)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (license_key, datetime.now().isoformat(), ip_address, account_number, 'SUCCESS'))
         
         conn.commit()
         conn.close()
@@ -222,7 +248,9 @@ def validate_license():
             'status': status,
             'product': product,
             'message': 'License valid',
-            'days_remaining': (expiry - datetime.now()).days
+            'days_remaining': (expiry - datetime.now()).days,
+            'is_activated': True,
+            'account_number': account_number
         })
         
     except Exception as e:
@@ -246,7 +274,7 @@ def activate_license():
     try:
         data = request.json
         license_key = data.get('license_key', '').strip().upper()
-        account_number = data.get('account_number', '')
+        account_number = str(data.get('account_number', '')).strip()
         
         if not license_key:
             return jsonify({
@@ -254,12 +282,18 @@ def activate_license():
                 'message': 'License key is required'
             }), 400
         
+        if not account_number:
+            return jsonify({
+                'success': False,
+                'message': 'Account number is required'
+            }), 400
+        
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         
-        # Get current activation count
+        # Get current activation count and bound account
         c.execute('''
-            SELECT activations, max_activations, status 
+            SELECT activations, max_activations, status, account_number
             FROM licenses 
             WHERE license_key = ?
         ''', (license_key,))
@@ -273,13 +307,21 @@ def activate_license():
                 'message': 'License not found'
             })
         
-        activations, max_activations, status = result
+        activations, max_activations, status, bound_account = result
         
         if status != 'active':
             conn.close()
             return jsonify({
                 'success': False,
                 'message': f'License is {status}'
+            })
+        
+        # Check if already bound to different account
+        if bound_account and bound_account != account_number:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'message': f'License already activated on a different account'
             })
         
         if activations >= max_activations:
@@ -289,12 +331,12 @@ def activate_license():
                 'message': f'Maximum activations ({max_activations}) reached'
             })
         
-        # Increment activation counter
+        # Bind account and increment activation counter
         c.execute('''
             UPDATE licenses 
-            SET activations = activations + 1 
+            SET activations = activations + 1, account_number = ?
             WHERE license_key = ?
-        ''', (license_key,))
+        ''', (account_number, license_key))
         
         conn.commit()
         conn.close()
@@ -364,9 +406,9 @@ def generate_license():
         
         c.execute('''
             INSERT INTO licenses 
-            (license_key, email, product, created_date, expiry_date, status, activations, max_activations)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (license_key, email, product, created_date, expiry_date, 'active', 0, max_activations))
+            (license_key, email, product, created_date, expiry_date, status, activations, max_activations, account_number)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (license_key, email, product, created_date, expiry_date, 'active', 0, max_activations, None))
         
         conn.commit()
         conn.close()
@@ -400,7 +442,7 @@ def check_license(license_key):
         c = conn.cursor()
         
         c.execute('''
-            SELECT email, product, created_date, expiry_date, status, activations, max_activations, last_validated
+            SELECT email, product, created_date, expiry_date, status, activations, max_activations, last_validated, account_number
             FROM licenses 
             WHERE license_key = ?
         ''', (license_key,))
@@ -414,7 +456,7 @@ def check_license(license_key):
                 'message': 'License not found'
             })
         
-        email, product, created, expiry, status, activations, max_activations, last_validated = result
+        email, product, created, expiry, status, activations, max_activations, last_validated, account_number = result
         
         # Check if expired
         expiry_date = datetime.strptime(expiry, '%Y-%m-%d')
@@ -432,7 +474,8 @@ def check_license(license_key):
             'activations': activations,
             'max_activations': max_activations,
             'days_remaining': max(0, days_remaining),
-            'last_validated': last_validated
+            'last_validated': last_validated,
+            'bound_account': account_number if account_number else 'Not activated yet'
         })
         
     except Exception as e:
