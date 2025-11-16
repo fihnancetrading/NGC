@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for GitHub Pages and other origins
-```
 
 # Database file
 DATABASE = 'licenses.db'
