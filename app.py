@@ -13,38 +13,6 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for GitHub Pages and other origins
 ```
 
-4. **Scroll down** and click **"Commit changes"**
-
----
-
-### **STEP 2: Update requirements.txt (Add Package)**
-
-1. **Go to:** https://github.com/fihnancetrading/NGC/blob/main/requirements.txt
-2. **Click the pencil icon** ✏️ (Edit this file)
-3. **Add this line:**
-
-**Your requirements.txt should look like:**
-```
-Flask==3.0.0
-flask-cors==4.0.0
-gunicorn==21.2.0
-```
-
-4. **Click "Commit changes"**
-
----
-
-### **STEP 3: Wait for Render to Deploy (2-3 minutes)**
-
-1. **Go to:** https://dashboard.render.com
-2. **Click:** ngc-ey07
-3. You'll see **"Deploying..."** at the top
-4. **Watch the "Logs" tab**
-5. Wait for these messages:
-```
-   🔧 Initializing NGC License Server...
-   ✅ Database initialized
-
 # Database file
 DATABASE = 'licenses.db'
 
